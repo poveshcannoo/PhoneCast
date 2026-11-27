@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">PhoneCast</string>
+    <string name="subtitle">Share your phone screen to a projector or Android TV on the same Wi-Fi.</string>
+
+    <string name="status_idle">Not sharing.</string>
+    <string name="status_connecting">Connecting to %1$s…</string>
+    <string name="status_live">Sharing your screen to %1$s</string>
+    <string name="stop_sharing">Stop sharing</string>
+
+    <string name="pick_receiver">1. Pick the projector</string>
+    <string name="searching">Searching your Wi-Fi… Open PhoneCast on the projector first.</string>
+    <string name="receiver_item">📽  %1$s\n%2$s</string>
+    <string name="manual_title">…or type the address shown on the projector</string>
+    <string name="host_hint">e.g. 192.168.1.50</string>
+    <string name="connect">Connect</string>
+    <string name="enter_address">Enter the address shown on the projector</string>
+
+    <string name="quality">Quality</string>
+    <string name="share_audio">Also send sound</string>
+    <string name="audio_unsupported">Sound sharing needs Android 10 or newer</string>
+    <string name="drm_note">Some apps (Netflix, Prime Video, banking apps…) block screen capture and will show black. Apps can also refuse to share their sound.</string>
+    <string name="use_as_receiver">Use THIS device as the receiver</string>
+
+    <string name="already_sharing">Already sharing — stop first.</string>
+    <string name="try_again">The previous session was still closing — please tap the projector again.</string>
+    <string name="capture_denied">Screen-capture permission was not given.</string>
+    <string name="capture_unavailable">This device does not support screen capture.</string>
+
+    <string name="notif_channel">Screen sharing</string>
+    <string name="notif_connecting">Connecting to %1$s…</string>
+    <string name="notif_live">Sharing screen to %1$s</string>
+    <string name="stop">Stop</string>
+    <string name="err_projection">Could not start screen capture.</string>
+    <string name="err_connect">Could not connect to %1$s (%2$s). Check both devices are on the same Wi-Fi and the receiver is open.</string>
+    <string name="err_connection_lost">Connection to the receiver was lost.</string>
+    <string name="receiver_closed">The receiver closed the connection.</string>
+    <string name="audio_unavailable">Sound could not be captured — video only.</string>
+
+    <string name="receiver_title">PhoneCast receiver</string>
+    <string name="receiver_name">Shown on your phone as: %1$s</string>
+    <string name="receiver_instructions">On your phone, open PhoneCast and tap this device — or type this address:</string>
+    <string name="receiver_waiting">Waiting for a phone to connect…</string>
+    <string name="receiver_connected">Phone %1$s connected — starting video…</string>
+    <string name="receiver_disconnected">Disconnected: %1$s</string>
+    <string name="receiver_port_error">Could not open port %1$d: %2$s</string>
+    <string name="receiver_no_network">No network — connect this device to Wi-Fi.</string>
+    <string name="receiver_tip">Both devices must be on the same Wi-Fi (or the projector joined to the phone hotspot). Press Back to exit.</string>
+</resources>
