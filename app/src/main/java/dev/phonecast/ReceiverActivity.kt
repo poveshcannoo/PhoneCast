@@ -1,6 +1,9 @@
 package dev.phonecast
 
 import android.app.Activity
+import android.content.pm.PackageManager
+import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbManager
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
@@ -9,6 +12,7 @@ import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
 import android.view.Gravity
+import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
@@ -16,10 +20,16 @@ import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.TextView
 import java.io.IOException
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import kotlin.math.min
 import kotlin.math.roundToInt
 
-/** Full-screen receiver for the projector / TV. Controllable with just a remote (Back exits). */
+/**
+ * Full-screen receiver for the projector / TV. Accepts a phone over Wi-Fi (TCP) or over a
+ * USB cable (Android Open Accessory). While a USB phone is attached, USB has priority and
+ * the Wi-Fi server is paused. Controllable with just a remote (Back exits).
+ */
 class ReceiverActivity : Activity(), SurfaceHolder.Callback, ReceiverServer.Listener {
 
     private lateinit var root: FrameLayout
@@ -27,8 +37,16 @@ class ReceiverActivity : Activity(), SurfaceHolder.Callback, ReceiverServer.List
     private lateinit var overlay: View
     private lateinit var addressText: TextView
     private lateinit var statusText: TextView
+    private lateinit var usbLine: TextView
 
+    // Transport objects are only touched on the coordinator thread, so start/stop never race.
+    private val coordinator: ExecutorService = Executors.newSingleThreadExecutor()
+    @Volatile private var surface: Surface? = null
     private var server: ReceiverServer? = null
+    private var usbSession: UsbReceiver? = null
+    @Volatile private var usbLinked = false
+
+    private var usbWatcher: UsbHostWatcher? = null
     private var nsdManager: NsdManager? = null
     private var registration: NsdManager.RegistrationListener? = null
     private var wifiLock: WifiManager.WifiLock? = null
@@ -44,6 +62,9 @@ class ReceiverActivity : Activity(), SurfaceHolder.Callback, ReceiverServer.List
         ("PhoneCast · " + (n?.takeIf { it.isNotBlank() } ?: Build.MODEL)).take(60)
     }
 
+    private val usbSupported: Boolean
+        get() = Build.VERSION.SDK_INT >= 26 && packageManager.hasSystemFeature(PackageManager.FEATURE_USB_HOST)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_receiver)
@@ -54,7 +75,13 @@ class ReceiverActivity : Activity(), SurfaceHolder.Callback, ReceiverServer.List
         overlay = findViewById(R.id.overlay)
         addressText = findViewById(R.id.address)
         statusText = findViewById(R.id.status)
+        usbLine = findViewById(R.id.usb_line)
         findViewById<TextView>(R.id.name).text = getString(R.string.receiver_name, deviceName)
+        usbLine.setText(if (usbSupported) R.string.receiver_usb_hint else R.string.receiver_usb_unsupported)
+
+        if (usbSupported) {
+            usbWatcher = UsbHostWatcher(this, ::onUsbAccessory) { msg -> statusText.text = msg }
+        }
 
         surfaceView.holder.addCallback(this)
         root.addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
@@ -69,13 +96,20 @@ class ReceiverActivity : Activity(), SurfaceHolder.Callback, ReceiverServer.List
         refreshAddresses()
         registerNsd()
         wifiLock = NetUtils.acquireWifiLock(this, "phonecast-receiver")
+        usbWatcher?.start()
     }
 
     override fun onStop() {
+        usbWatcher?.stop()
         unregisterNsd()
         NetUtils.release(wifiLock)
         wifiLock = null
         super.onStop()
+    }
+
+    override fun onDestroy() {
+        coordinator.shutdown()
+        super.onDestroy()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -83,26 +117,88 @@ class ReceiverActivity : Activity(), SurfaceHolder.Callback, ReceiverServer.List
         if (hasFocus) hideSystemUi()
     }
 
-    // ---------------------------------------------------------------- surface -> server lifecycle
+    // ---------------------------------------------------------------- surface -> transports
 
     override fun surfaceCreated(holder: SurfaceHolder) {
-        try {
-            server = ReceiverServer(holder.surface, this).also { it.start() }
-            statusText.setText(R.string.receiver_waiting)
-        } catch (e: IOException) {
-            statusText.text = getString(R.string.receiver_port_error, Protocol.PORT, e.message ?: "")
-        }
+        surface = holder.surface
+        onCoordinator { startWifiIfIdle() }
+        usbWatcher?.scan()
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
-        // Blocks until the decoder has released the surface.
-        server?.stop()
-        server = null
+        surface = null
+        // Block until every decoder has released the surface.
+        try {
+            coordinator.submit {
+                usbSession?.stopAndWait()
+                usbSession = null
+                server?.stop()
+                server = null
+            }.get()
+        } catch (e: Exception) {
+            Log.w(TAG, "Stopping transports failed", e)
+        }
     }
 
-    // ---------------------------------------------------------------- server callbacks (background threads)
+    private fun onCoordinator(block: () -> Unit) {
+        try {
+            coordinator.execute(block)
+        } catch (_: Exception) {
+            // Activity is being destroyed.
+        }
+    }
+
+    /** Coordinator thread. */
+    private fun startWifiIfIdle() {
+        val s = surface ?: return
+        if (server != null || usbSession != null) return
+        try {
+            server = ReceiverServer(s, this).also { it.start() }
+            runOnUiThread { if (!usbLinked) statusText.setText(R.string.receiver_waiting) }
+        } catch (e: IOException) {
+            runOnUiThread { statusText.text = getString(R.string.receiver_port_error, Protocol.PORT, e.message ?: "") }
+        }
+    }
+
+    /** UI thread: a phone in PhoneCast USB mode is attached and we have permission. */
+    private fun onUsbAccessory(device: UsbDevice) {
+        if (Build.VERSION.SDK_INT < 26) return
+        val usb = getSystemService(USB_SERVICE) as UsbManager
+        onCoordinator {
+            if (usbSession != null) return@onCoordinator
+            val s = surface ?: return@onCoordinator
+            // USB wins: pause Wi-Fi so only one stream uses the surface.
+            server?.stop()
+            server = null
+            val link = try {
+                UsbStreamLink(usb, device)
+            } catch (e: Exception) {
+                Log.w(TAG, "USB link failed", e)
+                runOnUiThread { statusText.text = getString(R.string.receiver_usb_error, e.message ?: "") }
+                startWifiIfIdle()
+                return@onCoordinator
+            }
+            usbLinked = true
+            runOnUiThread { statusText.setText(R.string.receiver_usb_ready) }
+            usbSession = UsbReceiver(s, link, this) {
+                onCoordinator {
+                    usbSession = null
+                    usbLinked = false
+                    runOnUiThread {
+                        if (!isFinishing) {
+                            overlay.visibility = View.VISIBLE
+                            statusText.setText(R.string.receiver_usb_unplugged)
+                        }
+                    }
+                    startWifiIfIdle()
+                }
+            }.also { it.start() }
+        }
+    }
+
+    // ---------------------------------------------------------------- stream callbacks (background threads)
 
     override fun onClientConnected(address: String) = runOnUiThread {
         statusText.text = getString(R.string.receiver_connected, address)
@@ -119,8 +215,11 @@ class ReceiverActivity : Activity(), SurfaceHolder.Callback, ReceiverServer.List
         if (isFinishing) return@runOnUiThread
         overlay.visibility = View.VISIBLE
         refreshAddresses()
-        statusText.text = reason?.let { getString(R.string.receiver_disconnected, it) }
-            ?: getString(R.string.receiver_waiting)
+        statusText.text = when {
+            reason != null -> getString(R.string.receiver_disconnected, reason)
+            usbLinked -> getString(R.string.receiver_usb_ready)
+            else -> getString(R.string.receiver_waiting)
+        }
     }
 
     // ---------------------------------------------------------------- helpers

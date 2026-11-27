@@ -48,7 +48,8 @@ class CastService : Service() {
         private const val CHANNEL_ID = "sharing"
         private const val NOTIFICATION_ID = 1
 
-        fun start(context: Context, resultCode: Int, data: Intent, host: String, port: Int, preset: Int, audio: Boolean) {
+        /** [host] = null means "send over the USB cable" (Android Open Accessory link). */
+        fun start(context: Context, resultCode: Int, data: Intent, host: String?, port: Int, preset: Int, audio: Boolean) {
             val i = Intent(context, CastService::class.java).setAction(ACTION_START)
                 .putExtra(EXTRA_RESULT_CODE, resultCode)
                 .putExtra(EXTRA_RESULT_DATA, data)
@@ -122,7 +123,8 @@ class CastService : Service() {
 
     private fun begin(intent: Intent) {
         started = true
-        val host = intent.getStringExtra(EXTRA_HOST).orEmpty()
+        val host: String? = intent.getStringExtra(EXTRA_HOST)
+        val label = host ?: getString(R.string.usb_target)
         val port = intent.getIntExtra(EXTRA_PORT, Protocol.PORT)
         val wantAudio = intent.getBooleanExtra(EXTRA_AUDIO, false)
         val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED)
@@ -135,12 +137,12 @@ class CastService : Service() {
         preset = Presets.get(intent.getIntExtra(EXTRA_PRESET, Presets.DEFAULT))
 
         // Must be foreground (type mediaProjection) BEFORE getMediaProjection() on Android 14+.
-        startForegroundCompat(buildNotification(getString(R.string.notif_connecting, host)))
-        StreamState.update(StreamState.Phase.CONNECTING, host, null)
+        startForegroundCompat(buildNotification(getString(R.string.notif_connecting, label)))
+        StreamState.update(StreamState.Phase.CONNECTING, label, null)
 
         val mpm = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         val mp = try {
-            if (data != null && host.isNotEmpty()) mpm.getMediaProjection(resultCode, data) else null
+            if (data != null) mpm.getMediaProjection(resultCode, data) else null
         } catch (e: Exception) {
             Log.e(TAG, "getMediaProjection failed", e)
             null
@@ -159,22 +161,16 @@ class CastService : Service() {
             override fun onCapturedContentResize(width: Int, height: Int) = onSourceSize(width, height)
         }, control)
 
-        control.post { connectAndStream(host, port, wantAudio) }
+        control.post { connectAndStream(host, label, port, wantAudio) }
     }
 
-    private fun connectAndStream(host: String, port: Int, wantAudio: Boolean) {
+    private fun connectAndStream(host: String?, label: String, port: Int, wantAudio: Boolean) {
         if (stopping) return
         try {
-            val s = Socket()
-            s.tcpNoDelay = true
-            s.connect(InetSocketAddress(host, port), 5000)
-
-            val w = PacketWriter(s) { control.post { shutdown(getString(R.string.err_connection_lost)) } }
+            val w = if (host == null) openUsbWriter() else openTcpWriter(host, port)
             w.onBacklog = { encoder?.requestKeyframe() }
             w.start()
             writer = w
-            startBackChannel(s)
-            wifiLock = NetUtils.acquireWifiLock(this, "phonecast-sender")
 
             val m = displayMetrics()
             dpi = m.densityDpi
@@ -182,13 +178,64 @@ class CastService : Service() {
             if (wantAudio) startAudio(w)
             if (Build.VERSION.SDK_INT < 34) watchRotation()
 
-            updateNotification(getString(R.string.notif_live, host))
+            updateNotification(getString(R.string.notif_live, label))
             val note = if (wantAudio && audio == null) getString(R.string.audio_unavailable) else null
-            StreamState.update(StreamState.Phase.LIVE, host, note)
+            StreamState.update(StreamState.Phase.LIVE, label, note)
         } catch (e: Exception) {
             Log.e(TAG, "Could not start streaming", e)
-            shutdown(getString(R.string.err_connect, host, e.message ?: e.javaClass.simpleName))
+            val msg = if (host == null && e is IOException) getString(R.string.err_usb_not_connected)
+            else if (host == null) getString(R.string.err_projection)
+            else getString(R.string.err_connect, host, e.message ?: e.javaClass.simpleName)
+            shutdown(msg)
         }
+    }
+
+    private fun openTcpWriter(host: String, port: Int): PacketWriter {
+        val s = Socket()
+        s.tcpNoDelay = true
+        s.connect(InetSocketAddress(host, port), 5000)
+        val w = PacketWriter(s.getOutputStream(), closeAction = { s.close() }) {
+            control.post { shutdown(getString(R.string.err_connection_lost)) }
+        }
+        startBackChannel(s)
+        wifiLock = NetUtils.acquireWifiLock(this, "phonecast-sender")
+        return w
+    }
+
+    /** USB: the accessory link is opened by MainActivity and shared across sessions. */
+    private fun openUsbWriter(): PacketWriter {
+        val out = AccessoryLink.output ?: throw IOException("USB projector not connected")
+        AccessoryLink.listener = object : AccessoryLink.Listener {
+            override fun onByte(b: Int) {
+                when (b) {
+                    Protocol.REQ_KEYFRAME -> encoder?.requestKeyframe()
+                    Protocol.REQ_HELLO -> control.post { resync() }
+                }
+            }
+
+            override fun onLost() {
+                control.post { shutdown(getString(R.string.err_usb_lost)) }
+            }
+        }
+        // closeAction does nothing: the USB link stays open for the next session.
+        return PacketWriter(out, closeAction = {}) {
+            AccessoryLink.close()
+            control.post { shutdown(getString(R.string.err_usb_lost)) }
+        }
+    }
+
+    /** The receiver (re)started mid-stream: send a fresh handshake, headers and keyframe. */
+    private fun resync() {
+        val w = writer ?: return
+        if (stopping || encoder == null) return
+        Log.i(TAG, "Receiver asked for a resync")
+        w.sendHandshake()
+        audio?.resendHeader()
+        val width = srcW
+        val height = srcH
+        srcW = 0
+        srcH = 0
+        onSourceSize(width, height)
     }
 
     /** Reads single-byte requests from the receiver; EOF means the receiver went away. */
@@ -303,8 +350,9 @@ class CastService : Service() {
         virtualDisplay = null
         encoder?.stop()
         encoder = null
-        writer?.close()
+        writer?.finish() // tells the receiver we're done, then closes
         writer = null
+        AccessoryLink.listener = null
         projection?.let { p ->
             projection = null
             try { p.stop() } catch (_: Exception) {}

@@ -45,6 +45,24 @@ screen instead, tap **Use THIS device as the receiver**.
 
 Rotating the phone is handled: the stream re-shapes and the projector letterboxes it.
 
+## USB cable mode (lowest lag)
+
+The phone talks to the projector over the cable using Android Open Accessory, the same method Android Auto uses.
+No network and no drivers are involved.
+
+1. Open PhoneCast on the projector.
+2. Plug the phone into the projector's **USB-A port** (a USB-C to USB-A data cable; charge-only cables won't work).
+3. The projector asks *"Allow PhoneCast to access …?"* → OK with the remote. It may ask a second time after the phone re-connects in USB mode.
+4. The phone asks *"Open PhoneCast to handle this USB accessory?"* → OK (tick "Always" to skip this next time).
+5. On the phone tap **🔌 Share to projector over USB**.
+
+Requirements: the projector must run Android 8+ and have a USB port that supports data (USB host); some projectors only power their ports.
+While a phone is connected by USB, the projector pauses Wi-Fi receiving.
+USB removes Wi-Fi delay and jitter. The few frames of encode/decode delay remain. For zero delay, see the HDMI tip below.
+
+**Truly zero-lag alternative:** if your phone supports video out over USB-C (many Samsung Galaxy S/Note/Tab, Pixel 8 and newer, some Motorola/Asus/Sony),
+a USB-C → HDMI cable into the projector's HDMI input mirrors the screen directly with no app at all.
+
 ## Quality presets
 
 | Preset | Resolution | FPS | Bitrate |
@@ -80,6 +98,9 @@ use *Light*. Cheap projector chips often can't decode 1080p60.
 | `CastService.kt` | Foreground service: projection, encoder, rotation, connection lifecycle |
 | `ScreenEncoder.kt` | Hardware H.264 encoder (Surface input), size/encoder fallback |
 | `AudioCapturer.kt` | Captures playback audio (Android 10+) |
+| `AccessoryLink.kt` | Phone side of the USB cable link |
+| `UsbHost.kt` | Projector side of USB: switches the phone to accessory mode, bulk-transfer streams |
+| `StreamSession.kt` | Receiver stream player shared by Wi-Fi and USB |
 | `PacketWriter.kt` | Network send queue with congestion-aware frame dropping |
 | `ReceiverDiscovery.kt` | Finds receivers with NSD/mDNS |
 | `ReceiverActivity.kt` | Full-screen receiver UI, NSD advertising, IP display |

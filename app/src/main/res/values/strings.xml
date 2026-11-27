@@ -8,7 +8,18 @@
     <string name="status_live">Sharing your screen to %1$s</string>
     <string name="stop_sharing">Stop sharing</string>
 
-    <string name="pick_receiver">1. Pick the projector</string>
+    <string name="usb_title">USB cable (lowest lag)</string>
+    <string name="usb_hint">Open PhoneCast on the projector, then plug this phone into the projector’s USB port. The projector will switch the phone into PhoneCast USB mode.</string>
+    <string name="usb_found">Projector found on USB.</string>
+    <string name="usb_allow">🔌  Allow USB connection to projector</string>
+    <string name="usb_ready">Projector connected by USB.</string>
+    <string name="usb_share">🔌  Share to projector over USB</string>
+    <string name="usb_busy">The USB link is busy. Unplug the cable and plug it back in.</string>
+    <string name="usb_retry">🔌  Retry USB</string>
+    <string name="usb_target">USB projector</string>
+    <string name="err_usb_not_connected">The projector is not connected by USB. Replug the cable and wait for “Projector connected by USB”.</string>
+    <string name="err_usb_lost">The USB cable was disconnected.</string>
+    <string name="pick_receiver">Wi-Fi: pick the projector</string>
     <string name="searching">Searching your Wi-Fi… Open PhoneCast on the projector first.</string>
     <string name="receiver_item">📽  %1$s\n%2$s</string>
     <string name="manual_title">…or type the address shown on the projector</string>
@@ -45,5 +56,11 @@
     <string name="receiver_disconnected">Disconnected: %1$s</string>
     <string name="receiver_port_error">Could not open port %1$d: %2$s</string>
     <string name="receiver_no_network">No network — connect this device to Wi-Fi.</string>
+    <string name="receiver_usb_hint">🔌 Or plug the phone into this projector’s USB port for the lowest lag.</string>
+    <string name="receiver_usb_unsupported">USB mode needs Android 8+ and a USB host port on this device.</string>
+    <string name="usb_switching">Phone detected on USB — accept the prompt on the phone.</string>
+    <string name="receiver_usb_ready">Phone connected by USB — tap “Share to projector over USB” on the phone.</string>
+    <string name="receiver_usb_unplugged">USB phone disconnected.</string>
+    <string name="receiver_usb_error">USB error: %1$s</string>
     <string name="receiver_tip">Both devices must be on the same Wi-Fi (or the projector joined to the phone hotspot). Press Back to exit.</string>
 </resources>

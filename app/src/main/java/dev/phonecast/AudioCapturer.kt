@@ -47,7 +47,7 @@ class AudioCapturer(projection: MediaProjection, private val sink: (Int, Long, B
 
     fun start() {
         record.startRecording()
-        sink(Protocol.AUDIO_HEADER, 0, ByteBuffer.allocate(8).putInt(SAMPLE_RATE).putInt(CHANNELS).array())
+        resendHeader()
         running = true
         thread = Thread({
             val buf = ByteArray(CHUNK)
@@ -57,6 +57,10 @@ class AudioCapturer(projection: MediaProjection, private val sink: (Int, Long, B
                 else if (n < 0) break
             }
         }, "pc-audio").also { it.start() }
+    }
+
+    fun resendHeader() {
+        sink(Protocol.AUDIO_HEADER, 0, ByteBuffer.allocate(8).putInt(SAMPLE_RATE).putInt(CHANNELS).array())
     }
 
     fun stop() {

@@ -2,11 +2,17 @@ package dev.phonecast
 
 import android.Manifest
 import android.app.Activity
+import android.app.PendingIntent
 import android.app.UiModeManager
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.hardware.usb.UsbAccessory
+import android.hardware.usb.UsbManager
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
@@ -33,6 +39,14 @@ class MainActivity : Activity() {
     private lateinit var hostInput: EditText
     private lateinit var qualitySpinner: Spinner
     private lateinit var audioCheck: CheckBox
+    private lateinit var usbButton: Button
+    private lateinit var usbHint: TextView
+    private lateinit var usbManager: UsbManager
+    private var usbReceiverRegistered = false
+
+    private val usbReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) = refreshUsb()
+    }
 
     private var discovery: ReceiverDiscovery? = null
     private var pendingHost: String? = null
@@ -56,6 +70,10 @@ class MainActivity : Activity() {
         hostInput = findViewById(R.id.host)
         qualitySpinner = findViewById(R.id.quality)
         audioCheck = findViewById(R.id.audio)
+        usbButton = findViewById(R.id.usb_share)
+        usbHint = findViewById(R.id.usb_hint)
+        usbManager = getSystemService(USB_SERVICE) as UsbManager
+        usbButton.setOnClickListener { onUsbButton() }
 
         qualitySpinner.adapter = ArrayAdapter(
             this, android.R.layout.simple_spinner_dropdown_item, Presets.ALL.map { it.label }
@@ -84,15 +102,35 @@ class MainActivity : Activity() {
             pendingHost = it.getString(STATE_HOST)
             pendingPort = it.getInt(STATE_PORT, Protocol.PORT)
         }
+        handleUsbIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleUsbIntent(intent)
+        refreshUsb()
     }
 
     override fun onStart() {
         super.onStart()
         StreamState.observe(stateListener)
         discovery = ReceiverDiscovery(this, ::showReceivers).also { it.start() }
+        val filter = IntentFilter().apply {
+            addAction(UsbManager.ACTION_USB_ACCESSORY_DETACHED)
+            addAction(ACTION_USB_PERMISSION)
+        }
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(usbReceiver, filter, Context.RECEIVER_EXPORTED)
+        else registerReceiver(usbReceiver, filter)
+        usbReceiverRegistered = true
+        refreshUsb()
     }
 
     override fun onStop() {
+        if (usbReceiverRegistered) {
+            try { unregisterReceiver(usbReceiver) } catch (_: Exception) {}
+            usbReceiverRegistered = false
+        }
         StreamState.remove(stateListener)
         discovery?.stop()
         discovery = null
@@ -144,6 +182,59 @@ class MainActivity : Activity() {
         beginCast(host, port)
     }
 
+    // ---------------------------------------------------------------- USB cable
+
+    /** The projector switched this phone into PhoneCast USB mode and Android launched us. */
+    private fun handleUsbIntent(i: Intent?) {
+        if (i?.action != UsbManager.ACTION_USB_ACCESSORY_ATTACHED) return
+        val acc: UsbAccessory? = if (Build.VERSION.SDK_INT >= 33) {
+            i.getParcelableExtra(UsbManager.EXTRA_ACCESSORY, UsbAccessory::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            i.getParcelableExtra(UsbManager.EXTRA_ACCESSORY)
+        }
+        if (acc != null && usbManager.hasPermission(acc)) AccessoryLink.open(usbManager, acc)
+    }
+
+    private fun findAccessory(): UsbAccessory? =
+        usbManager.accessoryList?.firstOrNull { it.manufacturer == Protocol.AOA_MANUFACTURER }
+
+    private fun refreshUsb() {
+        val acc = findAccessory()
+        when {
+            acc == null -> {
+                usbButton.visibility = View.GONE
+                usbHint.setText(R.string.usb_hint)
+            }
+            usbManager.hasPermission(acc) -> {
+                val ok = AccessoryLink.open(usbManager, acc)
+                usbButton.visibility = View.VISIBLE
+                usbButton.setText(if (ok) R.string.usb_share else R.string.usb_retry)
+                usbHint.setText(if (ok) R.string.usb_ready else R.string.usb_busy)
+            }
+            else -> {
+                usbButton.visibility = View.VISIBLE
+                usbButton.setText(R.string.usb_allow)
+                usbHint.setText(R.string.usb_found)
+            }
+        }
+    }
+
+    private fun onUsbButton() {
+        val acc = findAccessory() ?: return refreshUsb()
+        if (!usbManager.hasPermission(acc)) {
+            val flags = if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0
+            val pi = PendingIntent.getBroadcast(this, 2, Intent(ACTION_USB_PERMISSION).setPackage(packageName), flags)
+            usbManager.requestPermission(acc, pi)
+            return
+        }
+        if (!AccessoryLink.open(usbManager, acc)) return refreshUsb()
+        beginCast(USB_TARGET, 0)
+    }
+
+    // ---------------------------------------------------------------- start sharing
+
+    /** [host] is an IP address, or [USB_TARGET] for the USB cable. */
     private fun beginCast(host: String, port: Int) {
         if (StreamState.current.phase != StreamState.Phase.IDLE) {
             Toast.makeText(this, R.string.already_sharing, Toast.LENGTH_SHORT).show()
@@ -187,7 +278,8 @@ class MainActivity : Activity() {
         val host = pendingHost ?: return
         if (resultCode == RESULT_OK && data != null) {
             val audio = audioCheck.isChecked && Build.VERSION.SDK_INT >= 29 && granted(Manifest.permission.RECORD_AUDIO)
-            CastService.start(this, resultCode, data, host, pendingPort, qualitySpinner.selectedItemPosition, audio)
+            val target = if (host == USB_TARGET) null else host
+            CastService.start(this, resultCode, data, target, pendingPort, qualitySpinner.selectedItemPosition, audio)
         } else {
             statusText.setText(R.string.capture_denied)
         }
@@ -209,5 +301,7 @@ class MainActivity : Activity() {
         const val PREF_AUDIO = "audio"
         const val STATE_HOST = "pendingHost"
         const val STATE_PORT = "pendingPort"
+        const val USB_TARGET = "@usb"
+        const val ACTION_USB_PERMISSION = "dev.phonecast.USB_ACCESSORY_PERMISSION"
     }
 }

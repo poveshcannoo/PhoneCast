@@ -23,8 +23,14 @@ object Protocol {
     const val VIDEO_KEYFRAME = 4 // payload: H.264 IDR access unit
     const val AUDIO_HEADER = 5   // payload: int sampleRate, int channels
     const val AUDIO_DATA = 6     // payload: PCM 16-bit little-endian
+    const val BYE = 7            // sender is stopping (stream may restart with a new handshake)
 
     const val REQ_KEYFRAME = 1
+    const val REQ_HELLO = 2      // receiver (re)connected: please resend handshake + headers
+
+    // Android Open Accessory identity the projector announces to the phone over USB.
+    const val AOA_MANUFACTURER = "PhoneCast"
+    const val AOA_MODEL = "PhoneCast"
 }
 
 data class Preset(val label: String, val maxLongSide: Int, val fps: Int, val bitrate: Int)

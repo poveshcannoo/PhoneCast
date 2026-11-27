@@ -50,6 +50,28 @@
             style="@style/Section"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:text="@string/usb_title" />
+
+        <TextView
+            android:id="@+id/usb_hint"
+            style="@style/Dim"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/usb_hint" />
+
+        <Button
+            android:id="@+id/usb_share"
+            style="@style/Btn"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/usb_share"
+            android:visibility="gone" />
+
+        <TextView
+            style="@style/Section"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
             android:text="@string/pick_receiver" />
 
         <TextView
